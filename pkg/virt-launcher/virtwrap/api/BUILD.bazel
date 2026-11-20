@@ -4,6 +4,7 @@ go_library(
     name = "go_default_library",
     srcs = [
         "deepcopy_generated.go",
+        "deepcopy_qemuoverride.go",
         "defaults.go",
         "doc.go",
         "schema.go",

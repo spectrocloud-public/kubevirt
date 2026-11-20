@@ -148,6 +148,9 @@ func createPCIHostDevice(hostDeviceData HostDeviceMetaData, hostPCIAddress strin
 		Source:  api.HostDeviceSource{Address: hostAddr},
 		Type:    api.HostDevicePCI,
 		Managed: "no",
+		// libvirt defaults mode to "subsystem"; state it explicitly because the
+		// domain-hook pipeline re-parses the XML with libvirtxml, which requires it.
+		Mode: "subsystem",
 	}
 
 	// For PCI we require explicit enablement as it can be pass-through or vgpu

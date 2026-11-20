@@ -51,6 +51,11 @@ The delta against the upstream `release-1.9` branch is intentionally small:
 
 ## Quick start
 
+For the exact ARM userspace used by PVM-1393 (QEMU 11.0.0 and libvirt 12.4.0, with the
+`qemu:override` and hostdev patches), see
+[`docs/nvidia-exact-virt-launcher.md`](docs/nvidia-exact-virt-launcher.md). The rest of this section
+is the generic AIE-NV build flow.
+
 ### Syncing NV RPMs
 
 ```shell

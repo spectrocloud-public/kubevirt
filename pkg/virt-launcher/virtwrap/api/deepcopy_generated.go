@@ -1549,6 +1549,11 @@ func (in *DomainSpec) DeepCopyInto(out *DomainSpec) {
 		*out = new(Commandline)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.QEMUOverride != nil {
+		in, out := &in.QEMUOverride, &out.QEMUOverride
+		*out = new(QEMUOverride)
+		(*in).DeepCopyInto(*out)
+	}
 	in.Metadata.DeepCopyInto(&out.Metadata)
 	if in.Features != nil {
 		in, out := &in.Features, &out.Features

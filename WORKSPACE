@@ -16356,3 +16356,120 @@ rpm(
         "https://storage.googleapis.com/builddeps/4ef415b98ddbe28f836b86699f4cec6002817ea20fb47499d3c6bb0814db6d4b",
     ],
 )
+
+
+rpm(
+    name = "libvirt-daemon-common-0__12.4.0-1.el10nv.aarch64",
+    sha256 = "0e783ce8eee22c0b7e591b8c472afcc3fd93d9861efd06a3f5f588fe52ebb9fd",
+    urls = [
+        "file:///rpms/libvirt-daemon-common-12.4.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "libvirt-daemon-driver-qemu-0__12.4.0-1.el10nv.aarch64",
+    sha256 = "3c5d2f7863c1bbc32082620ccb0d3b1199e6fde08bf56e7191d9a166328ab17c",
+    urls = [
+        "file:///rpms/libvirt-daemon-driver-qemu-12.4.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "libvirt-daemon-log-0__12.4.0-1.el10nv.aarch64",
+    sha256 = "191cc8db2e3345c73ffad91d66af1a0738015e6be28c79634156754bcfef5c20",
+    urls = [
+        "file:///rpms/libvirt-daemon-log-12.4.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "libvirt-libs-0__12.4.0-1.el10nv.aarch64",
+    sha256 = "795a8d51d5c3a3d0bd284dc5a9bf4582a10aa1748f593bed7bcad892dc72eed5",
+    urls = [
+        "file:///rpms/libvirt-libs-12.4.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "libvirt-devel-0__12.4.0-1.el10nv.aarch64",
+    sha256 = "8b0f6d4158b5661e558182629767571adb3be98efb5f4d54b708b2cd8d6711de",
+    urls = [
+        "file:///rpms/libvirt-devel-12.4.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-img-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "94754e88d92f1dcdd05847432af6d89e0d0dae68187bc25bf800445b7cd0d35e",
+    urls = [
+        "file:///rpms/qemu-img-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-kvm-common-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "6d3ceaebc7ad15018a60bf69b3015b489ffb09d317d78c37741316ae70732d4f",
+    urls = [
+        "file:///rpms/qemu-kvm-common-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-kvm-core-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "da7ab64996ad65959cae5153d10ca21d554e55e6a3b2d4056eef41d3a47735de",
+    urls = [
+        "file:///rpms/qemu-kvm-core-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-kvm-device-display-virtio-gpu-pci-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "838ae1afcf7eb7abe98bc6e6322cd641b97cdec05b5cde1935870627e38b205a",
+    urls = [
+        "file:///rpms/qemu-kvm-device-display-virtio-gpu-pci-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-kvm-device-usb-host-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "90d85c22f36bea9026aad64f444205d0be379e2d5e09d4c3b223db573f562ac4",
+    urls = [
+        "file:///rpms/qemu-kvm-device-usb-host-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-kvm-device-usb-redirect-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "e6b36a56975975454e5d4ed8c30e81652d36c6591834035920c8980015a2e250",
+    urls = [
+        "file:///rpms/qemu-kvm-device-usb-redirect-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "libvirt-client-0__12.4.0-1.el10nv.aarch64",
+    sha256 = "862df1b6835c5000f9c4ce0d0693f7376daf3f3c021e8b2e932f6136cfd8c6af",
+    urls = [
+        "file:///rpms/libvirt-client-12.4.0-1.el10nv.aarch64.rpm",
+    ],
+)
+
+
+rpm(
+    name = "qemu-kvm-device-display-virtio-gpu-19__11.0.0-1.el10nv.aarch64",
+    sha256 = "0cabd406802ef9607a759e645a7bb80351d3dd5aa08502bbeb9456a70c09963f",
+    urls = [
+        "file:///rpms/qemu-kvm-device-display-virtio-gpu-11.0.0-1.el10nv.aarch64.rpm",
+    ],
+)
