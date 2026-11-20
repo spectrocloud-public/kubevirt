@@ -203,6 +203,14 @@ pkg_tar(
 )
 
 pkg_tar(
+    name = "qemu-roms-tar",
+    symlinks = {
+        "/usr/share/qemu/efi-virtio.rom": "/usr/share/ipxe/qemu/efi-virtio.rom",
+        "/usr/share/qemu/pxe-virtio.rom": "/usr/share/ipxe/qemu/pxe-virtio.rom",
+    },
+)
+
+pkg_tar(
     name = "get-version-tar",
     srcs = ["//:get-version"],
     package_dir = "/",
@@ -219,6 +227,7 @@ oci_image(
         "@io_bazel_rules_go//go/platform:linux_arm64": [
             "//rpm:launcherbase_aarch64",
             ":get-version-tar",
+            ":qemu-roms-tar",
             ":libvirt-config",
             ":passwd-tar",
             ":nsswitch-tar",

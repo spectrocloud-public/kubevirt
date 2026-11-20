@@ -234,6 +234,7 @@ type DomainSpec struct {
 	Clock          *Clock          `xml:"clock,omitempty"`
 	Resource       *Resource       `xml:"resource,omitempty"`
 	QEMUCmd        *Commandline    `xml:"qemu:commandline,omitempty"`
+	QEMUOverride   *QEMUOverride   `xml:"qemu:override,omitempty"`
 	Metadata       Metadata        `xml:"metadata,omitempty"`
 	Features       *Features       `xml:"features,omitempty"`
 	CPU            CPU             `xml:"cpu"`
@@ -561,6 +562,28 @@ type Env struct {
 
 type Arg struct {
 	Value string `xml:"value,attr"`
+}
+
+// QEMUOverride mirrors libvirt's <qemu:override> element, which lets the
+// caller pass extra QEMU device frontend properties (for example
+// pcie-root-port.pref64-reserve on arm64 GPU passthrough).
+type QEMUOverride struct {
+	Devices []QEMUOverrideDevice `xml:"device"`
+}
+
+type QEMUOverrideDevice struct {
+	Alias    string               `xml:"alias,attr"`
+	Frontend QEMUOverrideFrontend `xml:"frontend"`
+}
+
+type QEMUOverrideFrontend struct {
+	Properties []QEMUOverrideProperty `xml:"property"`
+}
+
+type QEMUOverrideProperty struct {
+	Name  string `xml:"name,attr"`
+	Type  string `xml:"type,attr,omitempty"`
+	Value string `xml:"value,attr,omitempty"`
 }
 
 type Resource struct {
