@@ -18,6 +18,18 @@ The selected versions are at or above the NVIDIA Grace/Vera guide minimums.
 
 The image is **aarch64 only**. It does not contain a kernel. The host and guest kernels are separate.
 
+## Validated image
+
+Built and tested on the ARM AWS cluster:
+
+```text
+us-east1-docker.pkg.dev/spectro-images/dev/vmo/ahmed/nvda-cert/virt-launcher:pvm-1393-aie-upstream-20261120
+sha256:7dffb4cda18e4fce6160e2a8283812760ed0870b920ebbdb19294f6424f7840a
+```
+
+T4G validation: 2× T4G, driver 595.91.07, BAR1 256 MiB, `topo` PHB, analyzer 0 FAIL / 1 WARN
+(host topology not supplied).
+
 ## RPM source
 
 The RPMs are published by the CentOS Stream AIE SIG:
