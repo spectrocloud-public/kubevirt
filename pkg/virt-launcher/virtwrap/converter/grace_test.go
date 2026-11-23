@@ -269,7 +269,7 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(domainSpec.Devices.IOMMU[0].Driver.PCIBus).To(Equal(graceExpanderBusIndexes(domainSpec)[0]))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.Accel).To(Equal("on"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.ATS).To(Equal("on"))
-		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("on"))
+		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("off"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.RIL).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.SSIDSize).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.OAS).To(BeEmpty())
@@ -297,7 +297,7 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(domainSpec.Devices.IOMMU).To(HaveLen(1))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.Accel).To(Equal("on"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.ATS).To(Equal("on"))
-		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("on"))
+		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("off"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.RIL).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.SSIDSize).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.OAS).To(BeEmpty())
@@ -395,10 +395,16 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(findGraceSibling(domainSpec.CPU.NUMA.Cells[0].Distances.Siblings, "9").Value).To(Equal(uint64(80)))
 	})
 
-	It("fails when Generic Initiator NUMA correlation is partial", func() {
+	It("falls back to sorted GI nodes when correlation is partial", func() {
 		fakeRuntime.addGraceGPU("0000:81:00.0", 0, 16*1024*1024*1024)
 		fakeRuntime.addGraceGPU("0000:82:00.0", 0, 16*1024*1024*1024)
 		fakeRuntime.giNodesByBDF["0000:81:00.0"] = uint32Range(2, 9)
+		fakeRuntime.giNodes = uint32Range(2, 17)
+		fakeRuntime.addDistances(append([]uint32{0}, fakeRuntime.giNodes...))
+		// Simulate the HBM-bearing GI node disappearing from sysfs while it is
+		// still listed by has_generic_initiator.
+		delete(fakeRuntime.distances, 2)
+		delete(fakeRuntime.distances[3], 2)
 		domainSpec := newGraceConversionDomain(
 			newGraceTestHostDevice("gpu-gpu0", api.HostDevicePCI, "0x0000", "0x81", "0x00", "0x0"),
 			newGraceTestHostDevice("gpu-gpu1", api.HostDevicePCI, "0x0000", "0x82", "0x00", "0x0"),
@@ -406,7 +412,21 @@ var _ = Describe("Grace domain conversion", func() {
 
 		err := configureGraceIOVirtualization(domainSpec, []string{"gpu-gpu0", "gpu-gpu1"}, true)
 
-		Expect(err).To(MatchError(ContainSubstring("correlated for some but not all Grace hostdevs")))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(domainSpec.Devices.HostDevices[0].ACPI.NodeSet).To(Equal("1-8"))
+		Expect(domainSpec.Devices.HostDevices[1].ACPI.NodeSet).To(Equal("9-16"))
+		Expect(findGraceSibling(domainSpec.CPU.NUMA.Cells[1].Distances.Siblings, "2").Value).To(Equal(uint64(11)))
+	})
+
+	It("uses a sibling GI node distance vector when the HBM GI node is missing", func() {
+		fakeRuntime.distances[3] = map[uint32]uint64{0: 80, 1: 120, 3: 10}
+		delete(fakeRuntime.distances, 2)
+
+		distances, err := graceHostNUMADistances(2)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(distances[0]).To(Equal(uint64(80)))
+		Expect(distances[1]).To(Equal(uint64(120)))
 	})
 
 	It("fails when the IOMMUFD file descriptor is not available", func() {
