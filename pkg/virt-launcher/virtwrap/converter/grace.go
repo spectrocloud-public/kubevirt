@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kubevirt.io/client-go/log"
 	"kubevirt.io/kubevirt/pkg/util/hardware"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
@@ -244,8 +245,10 @@ func prepareGraceHostDevices(domainSpec *api.DomainSpec, verifiedDevices []verif
 		return nil, nil, 0, err
 	}
 
+	correlationPath := "acpi-correlated"
 	var giHostNodes []uint32
 	if !giNodesCorrelated {
+		correlationPath = "sorted-bdf"
 		giHostNodes, err = graceRuntimeInfo.GuestInitiatorHostNodes()
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("failed to discover Grace Generic Initiator NUMA nodes: %w", err)
@@ -254,7 +257,25 @@ func prepareGraceHostDevices(domainSpec *api.DomainSpec, verifiedDevices []verif
 		if len(giHostNodes) < requiredGINodes {
 			return nil, nil, 0, fmt.Errorf("GraceIOVirtualization requires %d host Generic Initiator NUMA nodes for %d Grace GPU(s), found %d", requiredGINodes, len(verifiedDevices), len(giHostNodes))
 		}
+
+		// The host GI groups follow the host PCI BDF order (0008, 0009,
+		// 0018, 0019 -> 2-9, 10-17, 18-25, 26-33).  The VMI alias order is
+		// assigned by the device plugin and is not guaranteed to match it.
+		// Assign the eight-node groups by source BDF so each GPU gets the
+		// host proximity group that belongs to it.
+		giHostNodesByDevice = map[string][]uint32{}
+		sortedDevices := append([]verifiedGraceHostDevice(nil), verifiedDevices...)
+		sort.Slice(sortedDevices, func(i, j int) bool {
+			return sortedDevices[i].SourceAddress < sortedDevices[j].SourceAddress
+		})
+		for index, verifiedDevice := range sortedDevices {
+			start := index * graceGINodesPerGPU
+			giHostNodesByDevice[verifiedDevice.SourceAddress] = giHostNodes[start : start+graceGINodesPerGPU]
+		}
+		giNodesCorrelated = true
 	}
+
+	log.Log.Infof("Grace GI assignment (%s): %s", correlationPath, formatGraceGIMapping(giHostNodesByDevice))
 
 	nextGuestCellID, err := nextNUMACellID(domainSpec)
 	if err != nil {
@@ -343,47 +364,42 @@ func gracePCIHole64DeviceFloorBytes(vendorID, deviceID string) uint64 {
 	return gracePCIHole64FloorBytes
 }
 
+func formatGraceGIMapping(mapping map[string][]uint32) string {
+	addresses := make([]string, 0, len(mapping))
+	for address := range mapping {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	parts := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		parts = append(parts, fmt.Sprintf("%s->%v", address, mapping[address]))
+	}
+	return strings.Join(parts, " ")
+}
+
 func graceHostGINodesByDevice(verifiedDevices []verifiedGraceHostDevice) (map[string][]uint32, bool, error) {
 	hostGINodesByDevice := map[string][]uint32{}
 	hostGINodeOwners := map[uint32]string{}
-	anyCorrelated := false
 
 	for _, verifiedDevice := range verifiedDevices {
 		hostGINodes, err := graceRuntimeInfo.GuestInitiatorHostNodesForDevice(verifiedDevice.SourceAddress)
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to discover Grace Generic Initiator NUMA nodes for hostdev %q at %s: %w", verifiedDevice.Alias, verifiedDevice.SourceAddress, err)
 		}
-		if len(hostGINodes) == 0 {
-			continue
-		}
-
-		anyCorrelated = true
-		sort.Slice(hostGINodes, func(i, j int) bool { return hostGINodes[i] < hostGINodes[j] })
+		// Per-device correlation is an optimization. If sysfs exposes no usable
+		// correlation for any GPU, fall back to the sorted host GI assignment.
 		if len(hostGINodes) != graceGINodesPerGPU {
-			return nil, true, fmt.Errorf("GraceIOVirtualization requires exactly %d host Generic Initiator NUMA nodes for hostdev %q at %s, found %d", graceGINodesPerGPU, verifiedDevice.Alias, verifiedDevice.SourceAddress, len(hostGINodes))
+			return nil, false, nil
 		}
-
+		sort.Slice(hostGINodes, func(i, j int) bool { return hostGINodes[i] < hostGINodes[j] })
 		for _, hostGINode := range hostGINodes {
-			if owner, exists := hostGINodeOwners[hostGINode]; exists {
-				return nil, true, fmt.Errorf("Grace Generic Initiator NUMA node %d is associated with multiple Grace hostdevs (%s and %s)", hostGINode, owner, verifiedDevice.Alias)
+			if _, exists := hostGINodeOwners[hostGINode]; exists {
+				// Ambiguous correlation is not usable; use the sorted fallback.
+				return nil, false, nil
 			}
 			hostGINodeOwners[hostGINode] = verifiedDevice.Alias
 		}
 		hostGINodesByDevice[verifiedDevice.SourceAddress] = append([]uint32(nil), hostGINodes...)
-	}
-
-	if !anyCorrelated {
-		return nil, false, nil
-	}
-	if len(hostGINodesByDevice) != len(verifiedDevices) {
-		var missingDevices []string
-		for _, verifiedDevice := range verifiedDevices {
-			if _, exists := hostGINodesByDevice[verifiedDevice.SourceAddress]; exists {
-				continue
-			}
-			missingDevices = append(missingDevices, fmt.Sprintf("%s at %s", verifiedDevice.Alias, verifiedDevice.SourceAddress))
-		}
-		return nil, true, fmt.Errorf("Grace Generic Initiator NUMA nodes were correlated for some but not all Grace hostdevs; missing correlations for %s", strings.Join(missingDevices, ", "))
 	}
 	return hostGINodesByDevice, true, nil
 }
@@ -401,7 +417,11 @@ func placePCIDevicesWithGraceIOVirtualization(domainSpec *api.DomainSpec, graceD
 			},
 		}
 		isolatedDevices[graceDevice.SourceAddress] = iommuDevice
-		numaOverrides[graceDevice.SourceAddress] = graceDevice.guestNUMANode
+		// The host GPU's PCI _PXM/NUMA ID is the first GI node of its
+		// eight-node group, not the CPU cell. Use that node for the
+		// isolated expander bus so the guest _PXM matches the host
+		// (2, 10, 18, 26), while the ACPI nodeset covers the full group.
+		numaOverrides[graceDevice.SourceAddress] = graceDevice.guestGINodes[0]
 	}
 
 	assigner := newExpanderBusAssignerWithOptions(domainSpec, isolatedDevices, numaOverrides)
@@ -451,6 +471,67 @@ func hostToGuestNUMAMap(guestToHost map[uint32]uint32) (map[uint32]uint32, error
 	return hostToGuest, nil
 }
 
+func graceBaselineNUMADistance(cellID, siblingID uint32) uint64 {
+	if cellID == siblingID {
+		return 10
+	}
+	return 80
+}
+
+// graceHostNUMADistances reads the host distance vector for a GI node. The
+// HBM-bearing first node of each GPU group can be absent from sysfs once the
+// GPU is handed to vfio. In that case, use a sibling GI node from the same
+// eight-node group so the host CPU-cell asymmetry is preserved.
+func graceHostNUMADistances(hostNode uint32) (map[uint32]uint64, error) {
+	distances, err := graceRuntimeInfo.NUMADistances(hostNode)
+	if err == nil {
+		return distances, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if hostNode < 2 {
+		return nil, nil
+	}
+
+	groupStart := uint32(2) + ((hostNode-2)/graceGINodesPerGPU)*graceGINodesPerGPU
+	for sibling := groupStart; sibling < groupStart+graceGINodesPerGPU; sibling++ {
+		if sibling == hostNode {
+			continue
+		}
+		distances, err = graceRuntimeInfo.NUMADistances(sibling)
+		if err == nil {
+			return distances, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return nil, nil
+}
+
+// graceGroupSiblingDistance returns the distance that the current host
+// distance row reports for an online sibling of hostNode in the same
+// eight-node GPU group. It is used when hostNode itself is absent from the
+// vector because the GPU is bound to vfio and the kernel only lists online
+// nodes. Mirroring an online sibling keeps the guest SLIT symmetric instead
+// of falling back to the generic baseline for every entry to that node.
+func graceGroupSiblingDistance(distances map[uint32]uint64, hostNode uint32) (uint64, bool) {
+	if hostNode < 2 {
+		return 0, false
+	}
+	groupStart := uint32(2) + ((hostNode-2)/graceGINodesPerGPU)*graceGINodesPerGPU
+	for sibling := groupStart; sibling < groupStart+graceGINodesPerGPU; sibling++ {
+		if sibling == hostNode {
+			continue
+		}
+		if distance, ok := distances[sibling]; ok {
+			return distance, true
+		}
+	}
+	return 0, false
+}
+
 func applyGraceNUMADistances(domainSpec *api.DomainSpec, guestToHostNUMA map[uint32]uint32) error {
 	if domainSpec.CPU.NUMA == nil {
 		return fmt.Errorf("GraceIOVirtualization requires guest NUMA cells for distance mapping")
@@ -467,7 +548,7 @@ func applyGraceNUMADistances(domainSpec *api.DomainSpec, guestToHostNUMA map[uin
 			continue
 		}
 
-		hostDistances, err := graceRuntimeInfo.NUMADistances(hostNode)
+		hostDistances, err := graceHostNUMADistances(hostNode)
 		if err != nil {
 			return fmt.Errorf("failed to read host NUMA distances for node %d: %w", hostNode, err)
 		}
@@ -477,7 +558,18 @@ func applyGraceNUMADistances(domainSpec *api.DomainSpec, guestToHostNUMA map[uin
 			hostSiblingID := guestToHostNUMA[guestSiblingID]
 			distance, exists := hostDistances[hostSiblingID]
 			if !exists {
-				return fmt.Errorf("missing host NUMA distance from node %d to node %d", hostNode, hostSiblingID)
+				// The HBM-bearing first node of a GPU group is absent from the
+				// host distance vectors while its GPU is bound to vfio. Use an
+				// online same-group sibling so the guest SLIT stays symmetric.
+				if cellID != guestSiblingID {
+					if siblingDistance, ok := graceGroupSiblingDistance(hostDistances, hostSiblingID); ok {
+						distance = siblingDistance
+						exists = true
+					}
+				}
+				if !exists {
+					distance = graceBaselineNUMADistance(cellID, guestSiblingID)
+				}
 			}
 			// Distance 10 is the guest-local distance. Host GI nodes can report 10
 			// for related but non-identical nodes, so bump non-self entries to keep
@@ -764,6 +856,13 @@ func (p sysfsGraceRuntimeInfoProvider) GuestInitiatorHostNodesForDevice(bdf stri
 	for _, node := range giNodes {
 		referencesDevice, err := p.nodeReferencesPCIAddress(node, bdf)
 		if err != nil {
+			// A host may list a GI node in has_generic_initiator while the node
+			// itself is no longer present in sysfs (for example, an HBM-bearing
+			// node removed after the GPU is handed to vfio). Treat that node as
+			// uncorrelated and let the sorted fallback assign guest cells.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, err
 		}
 		if referencesDevice {

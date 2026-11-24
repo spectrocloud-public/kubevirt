@@ -17,6 +17,7 @@ go_test(
     srcs = [
         "translate_suite_test.go",
         "translate_test.go",
+        "zz_roundtrip_test.go",
     ],
     embed = [":go_default_library"],
     race = "on",

@@ -265,6 +265,10 @@ func LookupDevicesNumaNodesWithWarnings(pciAddresses []string, domainSpec *api.D
 	// vcpu -> vnuma mapping
 	vCPUToCellMap := make(map[uint32]uint32)
 	for _, cell := range domainSpec.CPU.NUMA.Cells {
+		if cell.CPUs == "" {
+			// Generic Initiator cells carry no CPUs; there is no vCPU mapping to build.
+			continue
+		}
 		vcpusInCell, err := ParseCPUSetLine(cell.CPUs, MAX_CPU_LIMIT)
 		if err != nil {
 			warnings = append(warnings, DeviceNUMANodeLookupWarning{

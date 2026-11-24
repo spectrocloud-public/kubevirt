@@ -395,10 +395,16 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(findGraceSibling(domainSpec.CPU.NUMA.Cells[0].Distances.Siblings, "9").Value).To(Equal(uint64(80)))
 	})
 
-	It("fails when Generic Initiator NUMA correlation is partial", func() {
+	It("falls back to sorted GI nodes when correlation is partial", func() {
 		fakeRuntime.addGraceGPU("0000:81:00.0", 0, 16*1024*1024*1024)
 		fakeRuntime.addGraceGPU("0000:82:00.0", 0, 16*1024*1024*1024)
 		fakeRuntime.giNodesByBDF["0000:81:00.0"] = uint32Range(2, 9)
+		fakeRuntime.giNodes = uint32Range(2, 17)
+		fakeRuntime.addDistances(append([]uint32{0}, fakeRuntime.giNodes...))
+		// Simulate the HBM-bearing GI node disappearing from sysfs while it is
+		// still listed by has_generic_initiator.
+		delete(fakeRuntime.distances, 2)
+		delete(fakeRuntime.distances[3], 2)
 		domainSpec := newGraceConversionDomain(
 			newGraceTestHostDevice("gpu-gpu0", api.HostDevicePCI, "0x0000", "0x81", "0x00", "0x0"),
 			newGraceTestHostDevice("gpu-gpu1", api.HostDevicePCI, "0x0000", "0x82", "0x00", "0x0"),
@@ -406,7 +412,48 @@ var _ = Describe("Grace domain conversion", func() {
 
 		err := configureGraceIOVirtualization(domainSpec, []string{"gpu-gpu0", "gpu-gpu1"}, true)
 
-		Expect(err).To(MatchError(ContainSubstring("correlated for some but not all Grace hostdevs")))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(domainSpec.Devices.HostDevices[0].ACPI.NodeSet).To(Equal("1-8"))
+		Expect(domainSpec.Devices.HostDevices[1].ACPI.NodeSet).To(Equal("9-16"))
+		Expect(findGraceSibling(domainSpec.CPU.NUMA.Cells[1].Distances.Siblings, "2").Value).To(Equal(uint64(11)))
+	})
+
+	It("assigns GI groups by host BDF order regardless of device order", func() {
+		fakeRuntime.giNodes = uint32Range(2, 17)
+		devices := []verifiedGraceHostDevice{
+			{SourceAddress: "0000:82:00.0", Alias: "gpu-gpu1"},
+			{SourceAddress: "0000:81:00.0", Alias: "gpu-gpu0"},
+		}
+
+		mapping, correlated, err := graceHostGINodesByDevice(devices)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(correlated).To(BeTrue())
+		Expect(mapping["0000:81:00.0"]).To(Equal(uint32Range(2, 9)))
+		Expect(mapping["0000:82:00.0"]).To(Equal(uint32Range(10, 17)))
+	})
+
+	It("uses a sibling GI node distance vector when the HBM GI node is missing", func() {
+		fakeRuntime.distances[3] = map[uint32]uint64{0: 80, 1: 120, 3: 10}
+		delete(fakeRuntime.distances, 2)
+
+		distances, err := graceHostNUMADistances(2)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(distances[0]).To(Equal(uint64(80)))
+		Expect(distances[1]).To(Equal(uint64(120)))
+	})
+
+	It("mirrors an online same-group sibling for a host node missing from a distance row", func() {
+		distances := map[uint32]uint64{0: 80, 1: 120, 3: 10, 4: 11}
+
+		distance, ok := graceGroupSiblingDistance(distances, 2)
+
+		Expect(ok).To(BeTrue())
+		Expect(distance).To(Equal(uint64(10)))
+
+		_, ok = graceGroupSiblingDistance(distances, 0)
+		Expect(ok).To(BeFalse())
 	})
 
 	It("fails when the IOMMUFD file descriptor is not available", func() {

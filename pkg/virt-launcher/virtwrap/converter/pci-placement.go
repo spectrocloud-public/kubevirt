@@ -195,16 +195,17 @@ type numaAwareTopology struct {
 // expanderBusAssigner manages the assignment of PCIe expander buses and
 // NUMA aligned device placement.
 type expanderBusAssigner struct {
-	domainSpec              *api.DomainSpec
-	controllerIndex         uint32
-	controllerCount         uint32
-	topologyMap             map[uint32]*numaAwareTopology
-	devices                 map[string]*api.HostDevice
-	devicesNUMANodes        map[string]uint32
-	deviceNUMANodeOverrides map[string]uint32
-	isolatedDevices         map[string]*api.IOMMUDevice
-	strict                  bool
-	strictFailures          []string
+	domainSpec               *api.DomainSpec
+	controllerIndex          uint32
+	controllerCount          uint32
+	topologyMap              map[uint32]*numaAwareTopology
+	devices                  map[string]*api.HostDevice
+	devicesNUMANodes         map[string]uint32
+	devicesGroupingNUMANodes map[string]uint32
+	deviceNUMANodeOverrides  map[string]uint32
+	isolatedDevices          map[string]*api.IOMMUDevice
+	strict                   bool
+	strictFailures           []string
 
 	// lastAssignedBusNr tracks the last assigned bus number for expander buses.
 	// It starts from maxExpanderBusNr and decreases as expander buses are assigned
@@ -241,16 +242,17 @@ func newExpanderBusAssignerWithOptions(domainSpec *api.DomainSpec, isolatedDevic
 	log.Log.Infof("Current max controller index: %d", currentControllerIndex)
 
 	assigner := &expanderBusAssigner{
-		domainSpec:              domainSpec,
-		topologyMap:             make(map[uint32]*numaAwareTopology),
-		devices:                 make(map[string]*api.HostDevice),
-		devicesNUMANodes:        make(map[string]uint32),
-		deviceNUMANodeOverrides: numaOverrides,
-		isolatedDevices:         isolatedDevices,
-		strict:                  options.strict,
-		controllerIndex:         currentControllerIndex,
-		controllerCount:         0,
-		lastAssignedBusNr:       maxExpanderBusNr,
+		domainSpec:               domainSpec,
+		topologyMap:              make(map[uint32]*numaAwareTopology),
+		devices:                  make(map[string]*api.HostDevice),
+		devicesNUMANodes:         make(map[string]uint32),
+		devicesGroupingNUMANodes: make(map[string]uint32),
+		deviceNUMANodeOverrides:  numaOverrides,
+		isolatedDevices:          isolatedDevices,
+		strict:                   options.strict,
+		controllerIndex:          currentControllerIndex,
+		controllerCount:          0,
+		lastAssignedBusNr:        maxExpanderBusNr,
 	}
 
 	return assigner
@@ -332,15 +334,22 @@ func (a *expanderBusAssigner) addDevices(devices []api.HostDevice) error {
 
 	for _, address := range pciAddresses {
 		device := devicesByAddress[address]
+		hostNUMA, hasHostNUMA := devicesNUMANodes[address]
 		if numaNode, exists := a.deviceNUMANodeOverrides[address]; exists {
 			a.devices[address] = device
 			a.devicesNUMANodes[address] = numaNode
+			if hasHostNUMA {
+				a.devicesGroupingNUMANodes[address] = hostNUMA
+			} else {
+				a.devicesGroupingNUMANodes[address] = numaNode
+			}
 			continue
 		}
 
-		if numaNode, exists := devicesNUMANodes[address]; exists {
+		if hasHostNUMA {
 			a.devices[address] = device
-			a.devicesNUMANodes[address] = numaNode
+			a.devicesNUMANodes[address] = hostNUMA
+			a.devicesGroupingNUMANodes[address] = hostNUMA
 		} else {
 			reason := "no guest NUMA node mapping is available"
 			if warningReasons := warningsByAddress[address]; len(warningReasons) > 0 {
@@ -375,7 +384,10 @@ type numaDeviceGroups map[uint32][]*api.HostDevice
 func (a *expanderBusAssigner) groupDevicesByNUMA() numaDeviceGroups {
 	groups := make(numaDeviceGroups)
 	for addressKey, device := range a.devices {
-		numaNode, exists := a.devicesNUMANodes[addressKey]
+		numaNode, exists := a.devicesGroupingNUMANodes[addressKey]
+		if !exists {
+			numaNode, exists = a.devicesNUMANodes[addressKey]
+		}
 		if !exists {
 			continue
 		}
@@ -445,7 +457,12 @@ func (a *expanderBusAssigner) createDeviceTopology(numaNode uint32) *numaAwareTo
 func (a *expanderBusAssigner) buildTopology() error {
 	numaDeviceGroups := a.groupDevicesByNUMA()
 
-	for _, numaKey := range sortedKeys(numaDeviceGroups) {
+	// Enumerate groups from the highest NUMA node down: expander bus numbers
+	// decrease as topologies are placed, so the last group placed receives the
+	// lowest guest bus numbers and therefore the lowest guest GPU indices.
+	numaKeys := sortedKeys(numaDeviceGroups)
+	for i := len(numaKeys) - 1; i >= 0; i-- {
+		numaKey := numaKeys[i]
 		devices := numaDeviceGroups[numaKey]
 
 		var normalDevices []*api.HostDevice
@@ -457,7 +474,11 @@ func (a *expanderBusAssigner) buildTopology() error {
 				continue
 			}
 
-			topology := a.createDeviceTopology(numaKey)
+			pxbNode := numaKey
+			if perDeviceNode, ok := a.devicesNUMANodes[address]; ok {
+				pxbNode = perDeviceNode
+			}
+			topology := a.createDeviceTopology(pxbNode)
 			if err := a.placeDevice(topology, device); err != nil {
 				return fmt.Errorf("failed to place isolated device %s: %w", address, err)
 			}

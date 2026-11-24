@@ -68,6 +68,7 @@ func FromLibvirtDomain(domain *libvirtxml.Domain) (*api.DomainSpec, error) {
 		return nil, fmt.Errorf("failed to unmarshal XML into DomainSpec: %w", err)
 	}
 	TransferQEMUCommandline(xmlStr, spec)
+	transferQEMUOverride(domain, spec)
 	return spec, nil
 }
 
@@ -169,4 +170,26 @@ func parseEnvAttrs(t xml.StartElement) (api.Env, bool) {
 		return api.Env{}, false
 	}
 	return env, true
+}
+
+// transferQEMUOverride copies the libvirt <qemu:override> section (frontend
+// device properties) from the libvirtxml Domain to the KubeVirt DomainSpec.
+func transferQEMUOverride(domain *libvirtxml.Domain, spec *api.DomainSpec) {
+	if domain.QEMUOverride == nil || len(domain.QEMUOverride.Devices) == 0 {
+		return
+	}
+	spec.XmlNS = qemuNamespace
+	override := &api.QEMUOverride{}
+	for _, dev := range domain.QEMUOverride.Devices {
+		out := api.QEMUOverrideDevice{Alias: dev.Alias}
+		for _, prop := range dev.Frontend.Properties {
+			out.Frontend.Properties = append(out.Frontend.Properties, api.QEMUOverrideProperty{
+				Name:  prop.Name,
+				Type:  prop.Type,
+				Value: prop.Value,
+			})
+		}
+		override.Devices = append(override.Devices, out)
+	}
+	spec.QEMUOverride = override
 }
