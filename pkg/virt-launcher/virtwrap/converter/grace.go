@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kubevirt.io/client-go/log"
 	"kubevirt.io/kubevirt/pkg/util/hardware"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
@@ -53,7 +54,7 @@ const (
 
 	graceDefaultIOMMUAccel   = "on"
 	graceDefaultIOMMUATS     = "on"
-	graceDefaultIOMMUCMDQV   = "off"
+	graceDefaultIOMMUCMDQV   = "on"
 	graceSMMUv3IOMMUModel    = "smmuv3"
 	graceHostDeviceIOMMUFDOn = "yes"
 )
@@ -244,8 +245,10 @@ func prepareGraceHostDevices(domainSpec *api.DomainSpec, verifiedDevices []verif
 		return nil, nil, 0, err
 	}
 
+	correlationPath := "acpi-correlated"
 	var giHostNodes []uint32
 	if !giNodesCorrelated {
+		correlationPath = "sorted-bdf"
 		giHostNodes, err = graceRuntimeInfo.GuestInitiatorHostNodes()
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("failed to discover Grace Generic Initiator NUMA nodes: %w", err)
@@ -271,6 +274,8 @@ func prepareGraceHostDevices(domainSpec *api.DomainSpec, verifiedDevices []verif
 		}
 		giNodesCorrelated = true
 	}
+
+	log.Log.Infof("Grace GI assignment (%s): %s", correlationPath, formatGraceGIMapping(giHostNodesByDevice))
 
 	nextGuestCellID, err := nextNUMACellID(domainSpec)
 	if err != nil {
@@ -357,6 +362,19 @@ func gracePCIHole64DeviceFloorBytes(vendorID, deviceID string) uint64 {
 	// 2, and 4 TiB root pcihole64 values. If GB300 PCI IDs are added, they need
 	// their own larger floor because the guide requires 8 TiB for four GB300 GPUs.
 	return gracePCIHole64FloorBytes
+}
+
+func formatGraceGIMapping(mapping map[string][]uint32) string {
+	addresses := make([]string, 0, len(mapping))
+	for address := range mapping {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	parts := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		parts = append(parts, fmt.Sprintf("%s->%v", address, mapping[address]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func graceHostGINodesByDevice(verifiedDevices []verifiedGraceHostDevice) (map[string][]uint32, bool, error) {
@@ -492,6 +510,28 @@ func graceHostNUMADistances(hostNode uint32) (map[uint32]uint64, error) {
 	return nil, nil
 }
 
+// graceGroupSiblingDistance returns the distance that the current host
+// distance row reports for an online sibling of hostNode in the same
+// eight-node GPU group. It is used when hostNode itself is absent from the
+// vector because the GPU is bound to vfio and the kernel only lists online
+// nodes. Mirroring an online sibling keeps the guest SLIT symmetric instead
+// of falling back to the generic baseline for every entry to that node.
+func graceGroupSiblingDistance(distances map[uint32]uint64, hostNode uint32) (uint64, bool) {
+	if hostNode < 2 {
+		return 0, false
+	}
+	groupStart := uint32(2) + ((hostNode-2)/graceGINodesPerGPU)*graceGINodesPerGPU
+	for sibling := groupStart; sibling < groupStart+graceGINodesPerGPU; sibling++ {
+		if sibling == hostNode {
+			continue
+		}
+		if distance, ok := distances[sibling]; ok {
+			return distance, true
+		}
+	}
+	return 0, false
+}
+
 func applyGraceNUMADistances(domainSpec *api.DomainSpec, guestToHostNUMA map[uint32]uint32) error {
 	if domainSpec.CPU.NUMA == nil {
 		return fmt.Errorf("GraceIOVirtualization requires guest NUMA cells for distance mapping")
@@ -518,7 +558,18 @@ func applyGraceNUMADistances(domainSpec *api.DomainSpec, guestToHostNUMA map[uin
 			hostSiblingID := guestToHostNUMA[guestSiblingID]
 			distance, exists := hostDistances[hostSiblingID]
 			if !exists {
-				distance = graceBaselineNUMADistance(cellID, guestSiblingID)
+				// The HBM-bearing first node of a GPU group is absent from the
+				// host distance vectors while its GPU is bound to vfio. Use an
+				// online same-group sibling so the guest SLIT stays symmetric.
+				if cellID != guestSiblingID {
+					if siblingDistance, ok := graceGroupSiblingDistance(hostDistances, hostSiblingID); ok {
+						distance = siblingDistance
+						exists = true
+					}
+				}
+				if !exists {
+					distance = graceBaselineNUMADistance(cellID, guestSiblingID)
+				}
 			}
 			// Distance 10 is the guest-local distance. Host GI nodes can report 10
 			// for related but non-identical nodes, so bump non-self entries to keep

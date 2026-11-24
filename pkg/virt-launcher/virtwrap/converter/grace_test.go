@@ -269,7 +269,7 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(domainSpec.Devices.IOMMU[0].Driver.PCIBus).To(Equal(graceExpanderBusIndexes(domainSpec)[0]))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.Accel).To(Equal("on"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.ATS).To(Equal("on"))
-		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("off"))
+		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("on"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.RIL).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.SSIDSize).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.OAS).To(BeEmpty())
@@ -297,7 +297,7 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(domainSpec.Devices.IOMMU).To(HaveLen(1))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.Accel).To(Equal("on"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.ATS).To(Equal("on"))
-		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("off"))
+		Expect(domainSpec.Devices.IOMMU[0].Driver.CMDQV).To(Equal("on"))
 		Expect(domainSpec.Devices.IOMMU[0].Driver.RIL).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.SSIDSize).To(BeEmpty())
 		Expect(domainSpec.Devices.IOMMU[0].Driver.OAS).To(BeEmpty())
@@ -418,6 +418,21 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(findGraceSibling(domainSpec.CPU.NUMA.Cells[1].Distances.Siblings, "2").Value).To(Equal(uint64(11)))
 	})
 
+	It("assigns GI groups by host BDF order regardless of device order", func() {
+		fakeRuntime.giNodes = uint32Range(2, 17)
+		devices := []verifiedGraceHostDevice{
+			{SourceAddress: "0000:82:00.0", Alias: "gpu-gpu1"},
+			{SourceAddress: "0000:81:00.0", Alias: "gpu-gpu0"},
+		}
+
+		mapping, correlated, err := graceHostGINodesByDevice(devices)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(correlated).To(BeTrue())
+		Expect(mapping["0000:81:00.0"]).To(Equal(uint32Range(2, 9)))
+		Expect(mapping["0000:82:00.0"]).To(Equal(uint32Range(10, 17)))
+	})
+
 	It("uses a sibling GI node distance vector when the HBM GI node is missing", func() {
 		fakeRuntime.distances[3] = map[uint32]uint64{0: 80, 1: 120, 3: 10}
 		delete(fakeRuntime.distances, 2)
@@ -427,6 +442,18 @@ var _ = Describe("Grace domain conversion", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(distances[0]).To(Equal(uint64(80)))
 		Expect(distances[1]).To(Equal(uint64(120)))
+	})
+
+	It("mirrors an online same-group sibling for a host node missing from a distance row", func() {
+		distances := map[uint32]uint64{0: 80, 1: 120, 3: 10, 4: 11}
+
+		distance, ok := graceGroupSiblingDistance(distances, 2)
+
+		Expect(ok).To(BeTrue())
+		Expect(distance).To(Equal(uint64(10)))
+
+		_, ok = graceGroupSiblingDistance(distances, 0)
+		Expect(ok).To(BeFalse())
 	})
 
 	It("fails when the IOMMUFD file descriptor is not available", func() {
